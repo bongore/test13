@@ -18,6 +18,8 @@ import {
     class_room_address,
     quiz_address,
     legacy_quiz_addresses,
+    active_quiz_min_id,
+    active_quiz_start_epoch,
     tokenContract as token,
     tttTokenContract as tttToken,
     quizContract as quiz,
@@ -775,14 +777,40 @@ class Contracts_MetaMask {
         );
     }
 
+    isCurrentLectureQuizAddress(address = "") {
+        return this.normalizeAddress(address || quiz_address) === this.normalizeAddress(quiz_address);
+    }
+
+    isCurrentLectureQuizId(id = 0, sourceAddress = "") {
+        if (!this.isCurrentLectureQuizAddress(sourceAddress)) return false;
+        return Number(id) >= Number(active_quiz_min_id || 0);
+    }
+
+    isCurrentLectureQuizData(quizData, sourceAddress = "") {
+        if (!this.isCurrentLectureQuizId(quizData?.[0], sourceAddress)) return false;
+        const createdAt = Number(quizData?.[7] || 0);
+        const lectureStart = Number(active_quiz_start_epoch || 0);
+        return !lectureStart || !createdAt || createdAt >= lectureStart;
+    }
+
+    isCurrentLectureQuizSimple(simpleQuizData, sourceAddress = "") {
+        return this.isCurrentLectureQuizId(simpleQuizData?.[0], sourceAddress);
+    }
+
+    filterCurrentLectureInventory(entries = []) {
+        return (Array.isArray(entries) ? entries : []).filter((entry) => (
+            this.isCurrentLectureQuizId(entry?.id, entry?.address)
+        ));
+    }
+
     async getQuizInventory(forceRefresh = false) {
         const now = Date.now();
         if (!forceRefresh && Array.isArray(quizInventoryCacheMemory) && now - quizInventoryCacheFetchedAt < QUIZ_INVENTORY_CACHE_TTL_MS) {
-            return quizInventoryCacheMemory;
+            return this.filterCurrentLectureInventory(quizInventoryCacheMemory);
         }
 
         const persistedCache = readTimedCache(QUIZ_INVENTORY_PERSIST_KEY);
-        const persistedEntries = Array.isArray(persistedCache?.value) ? persistedCache.value : [];
+        const persistedEntries = this.filterCurrentLectureInventory(Array.isArray(persistedCache?.value) ? persistedCache.value : []);
         if (
             !forceRefresh
             && persistedEntries.length > 0
@@ -811,7 +839,10 @@ class Contracts_MetaMask {
                 .filter((result) => result.status === "fulfilled")
                 .map((result) => result.value)
                 .forEach(({ address, length }) => {
-                    for (let id = length - 1; id >= 0; id -= 1) {
+                    const minId = this.isCurrentLectureQuizAddress(address) ? Number(active_quiz_min_id || 0) : 0;
+                    const maxId = minId + Number(length || 0) - 1;
+                    for (let id = maxId; id >= minId; id -= 1) {
+                        if (!this.isCurrentLectureQuizId(id, address)) continue;
                         inventory.push({ id, address });
                     }
                 });
@@ -2716,9 +2747,13 @@ class Contracts_MetaMask {
     }
 
     async _save_answer(account, id, answer, sourceAddress = "") {
+        const targetQuizAddress = this.resolveQuizAddress(sourceAddress);
+        if (!this.isCurrentLectureQuizId(id, targetQuizAddress)) {
+            throw new Error("quiz_outside_current_lecture");
+        }
         return await this.writeContractDirect({
             account,
-            address: this.resolveQuizAddress(sourceAddress),
+            address: targetQuizAddress,
             abi: quiz_abi,
             functionName: "save_answer",
             args: [id, answer.toString()],
@@ -2771,6 +2806,9 @@ class Contracts_MetaMask {
 
     async get_quiz(id, sourceAddress = "", accountOverride = "") {
         const targetQuizAddress = this.resolveQuizAddress(sourceAddress);
+        if (!this.isCurrentLectureQuizId(id, targetQuizAddress)) {
+            throw new Error("quiz_outside_current_lecture");
+        }
         const account = normalizeReadAccount(accountOverride || await this.get_read_account_cached());
         const [answer_typr, res, res2, registeredCorrectAnswer] = await Promise.all([
             publicClient.readContract({ account, address: targetQuizAddress, abi: quiz_abi, functionName: "get_quiz_answer_type", args: [id] }),
@@ -2806,6 +2844,9 @@ class Contracts_MetaMask {
                     ]);
                 }
                 if (quizData?.[2] || simpleQuizData?.[2]) {
+                    if (!this.isCurrentLectureQuizData(quizData, source)) {
+                        throw new Error("quiz_outside_current_lecture");
+                    }
                     return { quizData, simpleQuizData, sourceAddress: source };
                 }
             } catch (error) {
@@ -2819,6 +2860,9 @@ class Contracts_MetaMask {
 
     async get_quiz_simple(id, sourceAddress = "", accountOverride = "") {
         const targetQuizAddress = this.resolveQuizAddress(sourceAddress);
+        if (!this.isCurrentLectureQuizId(id, targetQuizAddress)) {
+            throw new Error("quiz_outside_current_lecture");
+        }
         const account = normalizeReadAccount(accountOverride || await this.get_read_account_cached());
         const cacheKey = buildQuizSimpleCacheKey(targetQuizAddress, id, account || "public");
         const cachedQuiz = this.getQuizSimpleCacheEntry(cacheKey);
@@ -2974,12 +3018,16 @@ class Contracts_MetaMask {
             const targetQuizAddress = sourceAddress ? this.resolveQuizAddress(sourceAddress) : "";
             if (targetQuizAddress) {
                 try {
-                    return await publicClient.readContract({
+                    const rawLength = Number(await publicClient.readContract({
                         address: targetQuizAddress,
                         abi: quiz_abi,
                         functionName: "get_quiz_length",
                         args: [],
-                    });
+                    }));
+                    if (this.isCurrentLectureQuizAddress(targetQuizAddress)) {
+                        return Math.max(0, rawLength - Number(active_quiz_min_id || 0));
+                    }
+                    return 0;
                 } catch (error) {
                     console.log(error);
                     return 0;

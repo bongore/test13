@@ -312,7 +312,12 @@ function Answer_quiz() {
             });
         } catch (error) {
             console.error(error);
-            setLoadError("問題データの読み込みに失敗しました。通信状態を確認して再試行してください。");
+            const message = String(error?.message || "");
+            setLoadError(
+                message.includes("quiz_outside_current_lecture")
+                    ? "この問題は本講義の対象外です。これから登録される本講義用の問題のみ閲覧・回答できます。"
+                    : "問題データの読み込みに失敗しました。通信状態を確認して再試行してください。"
+            );
             appendActivityLog(ACTION_TYPES.QUIZ_LOAD_FAILURE, {
                 page: "answer_quiz",
                 quizId: id,

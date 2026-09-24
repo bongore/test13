@@ -7,7 +7,7 @@
 import { createPublicClient, createWalletClient, http, getContract, custom, fallback } from "viem";
 import token_contract from "./token_abi.json";
 import quiz_contract from "./quiz_abi.json";
-import { class_room_address, quiz_address, legacy_quiz_addresses, token_address, ttt_token_address, bootstrap_teacher_addresses, rpc_urls } from "./config";
+import { class_room_address, quiz_address, legacy_quiz_addresses, active_quiz_min_id, active_quiz_start_epoch, token_address, ttt_token_address, bootstrap_teacher_addresses, rpc_urls } from "./config";
 import { amoy } from "./network";
 
 /* eslint-disable no-restricted-globals */
@@ -267,6 +267,8 @@ export {
     class_room_address,
     quiz_address,
     legacy_quiz_addresses,
+    active_quiz_min_id,
+    active_quiz_start_epoch,
     tokenContract,
     tttTokenContract,
     quizContract,

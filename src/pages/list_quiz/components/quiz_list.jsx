@@ -1,0 +1,128 @@
+import { useEffect, useRef } from "react";
+import { useLocation } from "react-router-dom";
+
+function getInitialBatchSize() {
+    if (typeof window === "undefined") return 8;
+    const userAgent = window.navigator?.userAgent || "";
+    if (/iPhone|iPad|iPod/i.test(userAgent)) return 3;
+    if (/Android/i.test(userAgent)) return 4;
+    return Math.max(6, Math.floor(window.innerHeight / 120) + 2);
+}
+
+function Quiz_list(props) {
+    const location = useLocation();
+    const add_num = useRef(getInitialBatchSize());
+    const isLoadingRef = useRef(false);
+    const hasResolvedInitialLoadRef = useRef(false);
+    const resolveTimeoutRef = useRef(null);
+
+    const get_quiz_list = async (now) => {
+        // now が 0 以下でも quiz_sum があればそこからフォールバック
+        let effectiveNow = now;
+        if (effectiveNow <= 0) {
+            const fallbackSum = Number(props.quiz_sum || 0);
+            if (fallbackSum > 0) {
+                effectiveNow = fallbackSum;
+                props.now_numRef.current = fallbackSum;
+            } else {
+                // quiz_sum もない場合は初期ロード解決だけ行い return
+                if (!hasResolvedInitialLoadRef.current) {
+                    // 一定時間後に初期ロード解決（空でも）して「問題がありません」を表示可能にする
+                    if (!resolveTimeoutRef.current) {
+                        resolveTimeoutRef.current = window.setTimeout(() => {
+                            resolveTimeoutRef.current = null;
+                            if (!hasResolvedInitialLoadRef.current) {
+                                hasResolvedInitialLoadRef.current = true;
+                                props.onInitialLoadResolved?.();
+                            }
+                        }, 8000);
+                    }
+                }
+                return;
+            }
+        }
+
+        if (isLoadingRef.current) return;
+        isLoadingRef.current = true;
+        let add_quiz_list = [];
+
+        try {
+            if (effectiveNow - add_num.current < 0) {
+                add_quiz_list = await props.cont.get_quiz_list(effectiveNow, 0, { preferCachedAccountOnly: true });
+                props.now_numRef.current = 0;
+            } else {
+                add_quiz_list = await props.cont.get_quiz_list(effectiveNow, effectiveNow - add_num.current, { preferCachedAccountOnly: true });
+                props.now_numRef.current = effectiveNow - add_num.current;
+            }
+
+            // メインスレッドに処理を返す（タブ応答性確保）
+            await new Promise((resolve) => setTimeout(resolve, 0));
+
+            props.Set_quiz_list((quiz_list) => {
+                const existingIds = new Set(
+                    quiz_list.map((item) => `${item?.sourceAddress || item?.[12] || ""}:${Number(item?.[0])}`)
+                );
+                const nextItems = (Array.isArray(add_quiz_list) ? add_quiz_list : []).filter(
+                    (item) => !existingIds.has(`${item?.sourceAddress || item?.[12] || ""}:${Number(item?.[0])}`)
+                );
+                return [...quiz_list, ...nextItems];
+            });
+            props.setLoadError?.("");
+        } catch (error) {
+            console.error("Failed to load quiz list batch", error);
+            props.setLoadError?.("問題一覧の一部読み込みに失敗しました。再読み込みしてください。");
+        } finally {
+            isLoadingRef.current = false;
+            if (!hasResolvedInitialLoadRef.current) {
+                hasResolvedInitialLoadRef.current = true;
+                if (resolveTimeoutRef.current) {
+                    window.clearTimeout(resolveTimeoutRef.current);
+                    resolveTimeoutRef.current = null;
+                }
+                props.onInitialLoadResolved?.();
+            }
+        }
+    };
+
+    useEffect(() => {
+        get_quiz_list(props.now_numRef.current);
+
+        if (typeof window === "undefined" || typeof IntersectionObserver === "undefined") {
+            return undefined;
+        }
+
+        const observer = new IntersectionObserver((entries) => {
+            for (const entry of entries) {
+                if (entry.isIntersecting) {
+                    get_quiz_list(props.now_numRef.current);
+                }
+            }
+        }, {
+            root: null,
+            rootMargin: "240px",
+            threshold: 0,
+        });
+
+        const targetElement = props.targetRef.current;
+        if (targetElement) {
+            observer.observe(targetElement);
+        }
+
+        return () => {
+            if (targetElement) {
+                observer.unobserve(targetElement);
+            }
+            observer.disconnect();
+            if (resolveTimeoutRef.current) {
+                window.clearTimeout(resolveTimeoutRef.current);
+                resolveTimeoutRef.current = null;
+            }
+        };
+        // location is intentionally referenced so list resets on route change.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [location.key, props.quiz_sum, props.refreshKey]);
+
+    return null;
+}
+
+export default Quiz_list;

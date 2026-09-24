@@ -1,4 +1,3 @@
-import { useEffect, useState } from "react";
 import {
     QUIZ_INPUT_MODE_PLAIN,
     QUIZ_INPUT_MODE_REGEX,
@@ -9,31 +8,16 @@ import {
 } from "../../../utils/quizAnswerInput";
 
 function Answer_area2(props) {
-    const [inputMode, setInputMode] = useState(QUIZ_INPUT_MODE_REGEX);
-    const [pattern, setPattern] = useState("");
-    const [placeholder, setPlaceholder] = useState("");
-    const [example, setExample] = useState("");
+    const config = parseQuizInputAnswerData(props.variable);
+    const { inputMode, pattern, placeholder, example } = config;
 
-    useEffect(() => {
-        const nextConfig = parseQuizInputAnswerData(props.variable);
-        setInputMode(nextConfig.inputMode);
-        setPattern(nextConfig.pattern);
-        setPlaceholder(nextConfig.placeholder);
-        setExample(nextConfig.example);
-    }, [props.variable]);
-
-    useEffect(() => {
-        const nextValue = encodeQuizInputAnswerData({
-            inputMode,
-            pattern,
-            placeholder,
-            example,
-        });
+    const updateConfig = (updates) => {
+        const nextValue = encodeQuizInputAnswerData({ ...config, ...updates });
         const currentValue = Array.isArray(props.variable) ? props.variable[0] || "" : "";
         if (currentValue !== nextValue) {
             props.set([nextValue]);
         }
-    }, [example, inputMode, pattern, placeholder, props.set, props.variable]);
+    };
 
     const regexValid = isRegexPatternValid(pattern);
     const showRegexExampleStatus = inputMode === QUIZ_INPUT_MODE_REGEX && example.trim() !== "";
@@ -53,14 +37,14 @@ function Answer_area2(props) {
                         <button
                             type="button"
                             className={`btn ${inputMode === QUIZ_INPUT_MODE_REGEX ? "btn-primary" : "btn-outline-primary"}`}
-                            onClick={() => setInputMode(QUIZ_INPUT_MODE_REGEX)}
+                            onClick={() => updateConfig({ inputMode: QUIZ_INPUT_MODE_REGEX })}
                         >
                             正規表現
                         </button>
                         <button
                             type="button"
                             className={`btn ${inputMode === QUIZ_INPUT_MODE_PLAIN ? "btn-primary" : "btn-outline-primary"}`}
-                            onClick={() => setInputMode(QUIZ_INPUT_MODE_PLAIN)}
+                            onClick={() => updateConfig({ inputMode: QUIZ_INPUT_MODE_PLAIN })}
                         >
                             通常テキスト
                         </button>
@@ -71,26 +55,26 @@ function Answer_area2(props) {
             {inputMode === QUIZ_INPUT_MODE_REGEX ? (
                 <div className="row" style={{ color: "var(--text-primary)" }}>
                     <div className="col-10">
-                        正規表現を入力
-                        <input type="text" className="form-control" value={pattern} onChange={(event) => setPattern(event.target.value)} />
+                        正規表現
+                        <input type="text" className="form-control" value={pattern} onChange={(event) => updateConfig({ pattern: event.target.value })} />
                         <div style={{ color: regexValid ? "var(--accent-green)" : "var(--accent-red)", marginTop: "8px" }}>
-                            {regexValid ? "使用できる正規表現です" : "正規表現が不正です"}
+                            {regexValid ? "使用できる正規表現です" : "正規表現が無効です"}
                         </div>
                     </div>
                 </div>
             ) : (
                 <div className="row" style={{ color: "var(--text-primary)" }}>
                     <div className="col-10">
-                        入力欄の案内文
+                        入力欄の初期文字
                         <input
                             type="text"
                             className="form-control"
                             value={placeholder}
                             placeholder="例: 学籍番号を入力してください"
-                            onChange={(event) => setPlaceholder(event.target.value)}
+                            onChange={(event) => updateConfig({ placeholder: event.target.value })}
                         />
                         <div style={{ marginTop: "8px", color: "var(--text-secondary)" }}>
-                            通常テキストでは自由入力として扱います。
+                            通常テキストでは完全一致となります。
                         </div>
                     </div>
                 </div>
@@ -98,16 +82,16 @@ function Answer_area2(props) {
 
             <div className="row" style={{ color: "var(--text-primary)", marginTop: "16px" }}>
                 <div className="col-10">
-                    例を入力
+                        解答例
                     <input
                         type="text"
                         className="form-control"
                         value={example}
-                        onChange={(event) => setExample(event.target.value)}
+                        onChange={(event) => updateConfig({ example: event.target.value })}
                     />
                     {showRegexExampleStatus ? (
                         <div style={{ color: exampleValid ? "var(--accent-green)" : "var(--accent-red)", marginTop: "8px" }}>
-                            {exampleValid ? "例は正規表現に一致しています" : "例が正規表現に一致していません"}
+                            {exampleValid ? "解答例は正規表現に一致しています" : "解答例が正規表現に一致していません"}
                         </div>
                     ) : null}
                 </div>
@@ -115,7 +99,7 @@ function Answer_area2(props) {
 
             <div className="row" style={{ color: "var(--text-primary)", marginTop: "16px" }}>
                 <div className="col-10">
-                    正解を入力
+                    正解
                     <input
                         type="text"
                         className="form-control"

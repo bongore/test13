@@ -1050,6 +1050,13 @@ class Contracts_MetaMask {
         deleteTimedCache(QUIZ_INVENTORY_PERSIST_KEY);
     }
 
+    invalidateStudentListCache() {
+        studentListCacheMemory = null;
+        studentListCacheFetchedAt = 0;
+        studentListCachePromise = null;
+        deleteTimedCache(STUDENT_LIST_CACHE_KEY);
+    }
+
     getQuizSimpleCacheEntry(cacheKey) {
         const now = Date.now();
         const memoryEntry = quizSimpleCacheMemory.get(cacheKey);
@@ -3138,6 +3145,7 @@ class Contracts_MetaMask {
         try {
             if (ethereum) {
                 try {
+                    this.invalidateStudentListCache();
                     const normalizedAddresses = this.normalizeAddressList(address);
                     if (normalizedAddresses.length === 0) {
                         throw new Error("有効な学生アドレスがありません。");
@@ -3155,13 +3163,16 @@ class Contracts_MetaMask {
                         throw new Error("指定したアドレスはすでに学生または教員として登録済みです。");
                     }
                     let account = await this.get_address();
-                    return await this.writeContractDirect({
+                    const hash = await this.writeContractDirect({
                         account,
                         address: class_room_address,
                         abi: [ADD_STUDENT_ABI],
                         functionName: "add_student",
                         args: [targets],
                     });
+                    const receipt = await this.waitForReceiptWithRetry(hash);
+                    this.invalidateStudentListCache();
+                    return receipt;
                 } catch (e) {
                     console.log(e);
                     throw e;

@@ -2,6 +2,10 @@ import React, { useEffect, useMemo, useState } from "react";
 import { Form } from "react-bootstrap";
 import { ACTION_TYPES, appendActivityLog } from "../../../utils/activityLog";
 import {
+    getCourseStudents,
+    syncCourseStudentsFromServer,
+} from "../../../utils/courseStudentRoster";
+import {
     CURRENT_TOKEN_GRANT_COURSE_KEY,
     CURRENT_TOKEN_GRANT_COURSE_LABEL,
     clearGrantedToken,
@@ -285,8 +289,16 @@ function Token_grant_panel(props) {
 
     async function loadStudents() {
         try {
-            const result = await props.cont.get_student_list();
-            const nextStudents = Array.isArray(result) ? result : [];
+            try {
+                await syncCourseStudentsFromServer();
+            } catch (syncError) {
+                console.error("Failed to sync course students", syncError);
+            }
+            let nextStudents = getCourseStudents(activeCourseKey);
+            if (nextStudents.length === 0 && activeCourseKey === LEGACY_TOKEN_GRANT_COURSE_KEY) {
+                const result = await props.cont.get_student_list();
+                nextStudents = Array.isArray(result) ? result : [];
+            }
             setStudents(nextStudents);
             const profileEntries = await Promise.all(
                 nextStudents.map(async (student) => {
@@ -310,7 +322,8 @@ function Token_grant_panel(props) {
         loadStudents();
         refreshGrantLedger();
         refreshSurveyRewardLedger();
-    }, [props.cont]);
+        setSelectedStudents([]);
+    }, [props.cont, activeCourseKey]);
 
     useEffect(() => {
         const timer = window.setInterval(() => {

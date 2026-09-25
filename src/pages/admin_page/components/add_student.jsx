@@ -1,6 +1,15 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Form } from "react-bootstrap";
 import { ACTION_TYPES, appendActivityLog } from "../../../utils/activityLog";
+import {
+    getCourseStudents,
+    persistCourseStudentsToServer,
+    syncCourseStudentsFromServer,
+} from "../../../utils/courseStudentRoster";
+import {
+    CURRENT_TOKEN_GRANT_COURSE_KEY,
+    CURRENT_TOKEN_GRANT_COURSE_LABEL,
+} from "../../../utils/tokenGrantLedger";
 
 function formatInternalId(prefix, index) {
     return `${prefix}-${String(index + 1).padStart(3, "0")}`;
@@ -9,6 +18,7 @@ function formatInternalId(prefix, index) {
 function Add_students(props) {
     const [addStudent, setAddStudent] = useState("");
     const [students, setStudents] = useState([]);
+    const [courseStudents, setCourseStudents] = useState([]);
     const [teachers, setTeachers] = useState([]);
     const [submitError, setSubmitError] = useState("");
     const addStudent_list = useMemo(
@@ -23,9 +33,29 @@ function Add_students(props) {
         () => new Set([...(students || []), ...(teachers || [])].map((item) => props.cont.normalizeAddress(item))),
         [students, teachers, props.cont]
     );
+    const teacherAddressSet = useMemo(
+        () => new Set((teachers || []).map((item) => props.cont.normalizeAddress(item))),
+        [teachers, props.cont]
+    );
+    const globalStudentAddressSet = useMemo(
+        () => new Set((students || []).map((item) => props.cont.normalizeAddress(item))),
+        [students, props.cont]
+    );
+    const courseStudentAddressSet = useMemo(
+        () => new Set((courseStudents || []).map((item) => props.cont.normalizeAddress(item))),
+        [courseStudents, props.cont]
+    );
     const duplicateRegisteredAddresses = useMemo(
         () => normalizedCandidates.filter((item) => registeredAddressSet.has(props.cont.normalizeAddress(item))),
         [normalizedCandidates, registeredAddressSet, props.cont]
+    );
+    const alreadyInCourseAddresses = useMemo(
+        () => normalizedCandidates.filter((item) => courseStudentAddressSet.has(props.cont.normalizeAddress(item))),
+        [normalizedCandidates, courseStudentAddressSet, props.cont]
+    );
+    const teacherAddresses = useMemo(
+        () => normalizedCandidates.filter((item) => teacherAddressSet.has(props.cont.normalizeAddress(item))),
+        [normalizedCandidates, teacherAddressSet, props.cont]
     );
     const duplicateRegisteredDetails = useMemo(
         () => duplicateRegisteredAddresses.map((address) => {
@@ -55,8 +85,19 @@ function Add_students(props) {
         [duplicateRegisteredAddresses, teachers, students, props.cont]
     );
     const newStudentTargets = useMemo(
-        () => normalizedCandidates.filter((item) => !registeredAddressSet.has(props.cont.normalizeAddress(item))),
-        [normalizedCandidates, registeredAddressSet, props.cont]
+        () => normalizedCandidates.filter((item) => {
+            const normalized = props.cont.normalizeAddress(item);
+            return !teacherAddressSet.has(normalized) && !courseStudentAddressSet.has(normalized);
+        }),
+        [normalizedCandidates, teacherAddressSet, courseStudentAddressSet, props.cont]
+    );
+    const onChainRegisterTargets = useMemo(
+        () => newStudentTargets.filter((item) => !globalStudentAddressSet.has(props.cont.normalizeAddress(item))),
+        [newStudentTargets, globalStudentAddressSet, props.cont]
+    );
+    const existingStudentCourseTargets = useMemo(
+        () => newStudentTargets.filter((item) => globalStudentAddressSet.has(props.cont.normalizeAddress(item))),
+        [newStudentTargets, globalStudentAddressSet, props.cont]
     );
 
     const loadStudents = async () => {
@@ -67,9 +108,16 @@ function Add_students(props) {
             ]);
             setStudents(Array.isArray(studentResult) ? studentResult : []);
             setTeachers(Array.isArray(teacherResult) ? teacherResult : []);
+            try {
+                await syncCourseStudentsFromServer();
+            } catch (syncError) {
+                console.error("Failed to sync course students", syncError);
+            }
+            setCourseStudents(getCourseStudents(CURRENT_TOKEN_GRANT_COURSE_KEY));
         } catch (error) {
             console.error("Failed to load registered students", error);
             setStudents([]);
+            setCourseStudents(getCourseStudents(CURRENT_TOKEN_GRANT_COURSE_KEY));
             setTeachers([]);
         }
     };
@@ -77,16 +125,29 @@ function Add_students(props) {
     const add_student = async () => {
         if (!addStudent_list.length) return;
         if (!newStudentTargets.length) {
-            setSubmitError("入力したアドレスはすべて既登録です。重複登録は行いません。");
+            setSubmitError(`入力したアドレスはすべて ${CURRENT_TOKEN_GRANT_COURSE_LABEL} に登録済み、または教員として登録済みです。`);
             return;
         }
         try {
             setSubmitError("");
-            await props.cont.add_student(newStudentTargets);
+            if (onChainRegisterTargets.length > 0) {
+                await props.cont.add_student(onChainRegisterTargets);
+            }
+            const actorAddress = props.cont.normalizeAddress(await props.cont.get_address().catch(() => ""));
+            await persistCourseStudentsToServer(CURRENT_TOKEN_GRANT_COURSE_KEY, newStudentTargets, {
+                courseLabel: CURRENT_TOKEN_GRANT_COURSE_LABEL,
+                addedAt: new Date().toISOString(),
+                source: "admin_add_student",
+                actorAddress,
+            });
             appendActivityLog(ACTION_TYPES.ADMIN_ADD_STUDENT, {
                 page: "admin",
+                courseKey: CURRENT_TOKEN_GRANT_COURSE_KEY,
+                courseLabel: CURRENT_TOKEN_GRANT_COURSE_LABEL,
                 count: newStudentTargets.length,
-                skippedCount: duplicateRegisteredAddresses.length,
+                onChainCount: onChainRegisterTargets.length,
+                existingStudentCount: existingStudentCourseTargets.length,
+                skippedCount: alreadyInCourseAddresses.length + teacherAddresses.length,
             });
             setAddStudent("");
             await loadStudents();
@@ -103,7 +164,10 @@ function Add_students(props) {
     return (
         <div>
             <h3 className="section-title">学生を追加</h3>
-            <p className="section-desc">追加する学生のウォレットアドレスを改行区切りで入力してください。下側で登録済み学生も確認できます。</p>
+            <p className="section-desc">
+                {CURRENT_TOKEN_GRANT_COURSE_LABEL} に参加する学生のウォレットアドレスを改行区切りで入力してください。
+                応用数学で登録済みの学生も、この講義の名簿へ追加できます。
+            </p>
 
             <Form.Group style={{ textAlign: "left", marginBottom: "var(--space-4)" }}>
                 <Form.Label>ウォレットアドレス一覧</Form.Label>
@@ -127,7 +191,7 @@ function Add_students(props) {
 
             {duplicateRegisteredAddresses.length > 0 && (
                 <div className="address-list" style={{ marginTop: "var(--space-4)" }}>
-                    <div className="address-list-title">既登録のため追加しないアドレス ({duplicateRegisteredAddresses.length}件)</div>
+                    <div className="address-list-title">オンチェーン登録済みのアドレス ({duplicateRegisteredAddresses.length}件)</div>
                     {duplicateRegisteredDetails.map((item, index) => (
                         <div key={`${item.address}-duplicate-${index}`} className="address-item">
                             <div className="address-item-id">{item.internalId}</div>
@@ -135,9 +199,21 @@ function Add_students(props) {
                                 <div>{item.address}</div>
                                 <div style={{ color: "var(--text-secondary)", fontSize: "var(--font-size-xs)" }}>
                                     既登録: {item.roleLabel}
+                                    {item.roleLabel === "学生" && !courseStudentAddressSet.has(props.cont.normalizeAddress(item.address))
+                                        ? ` / ${CURRENT_TOKEN_GRANT_COURSE_LABEL} 名簿には追加できます`
+                                        : ""}
                                 </div>
                             </div>
                         </div>
+                    ))}
+                </div>
+            )}
+
+            {alreadyInCourseAddresses.length > 0 && (
+                <div className="address-list" style={{ marginTop: "var(--space-4)" }}>
+                    <div className="address-list-title">{CURRENT_TOKEN_GRANT_COURSE_LABEL} に登録済みのため追加しないアドレス ({alreadyInCourseAddresses.length}件)</div>
+                    {alreadyInCourseAddresses.map((item, index) => (
+                        <div key={`${item}-course-duplicate-${index}`} className="address-item">{item}</div>
                     ))}
                 </div>
             )}
@@ -153,11 +229,11 @@ function Add_students(props) {
             </button>
 
             <div className="address-list" style={{ marginTop: "var(--space-8)" }}>
-                <div className="address-list-title">登録済み学生 ({students.length}件)</div>
-                {students.length === 0 ? (
-                    <div className="address-item">登録済み学生はまだありません。</div>
+                <div className="address-list-title">{CURRENT_TOKEN_GRANT_COURSE_LABEL} 登録済み学生 ({courseStudents.length}件)</div>
+                {courseStudents.length === 0 ? (
+                    <div className="address-item">{CURRENT_TOKEN_GRANT_COURSE_LABEL} の登録済み学生はまだありません。</div>
                 ) : (
-                    students.map((item, index) => (
+                    courseStudents.map((item, index) => (
                         <div key={`${item}-${index}`} className="address-item">
                             <div className="address-item-id">{formatInternalId("USER", index)}</div>
                             <div>{item}</div>

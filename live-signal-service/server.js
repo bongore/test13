@@ -16,6 +16,7 @@ let surveyRewardEntries = [];
 let deletedQuizzes = {};
 let pendingCreatedQuizzes = {};
 let activityLogs = [];
+let courseStudents = {};
 const LEGACY_TOKEN_GRANT_COURSE_KEY = "applied_math_2026";
 const LEGACY_TOKEN_GRANT_COURSE_LABEL = "応用数学";
 const CURRENT_TOKEN_GRANT_COURSE_KEY = "information_theory_2026";
@@ -144,6 +145,37 @@ function normalizeGrantRecord(record = null) {
     };
 }
 
+function normalizeCourseRosterEntry(entry = {}, fallbackCourseKey = CURRENT_TOKEN_GRANT_COURSE_KEY) {
+    const address = String(entry?.address || entry || "").trim().toLowerCase();
+    const courseKey = normalizeTokenGrantCourseKey(entry?.courseKey || fallbackCourseKey);
+    if (!address) return null;
+    return {
+        address,
+        courseKey,
+        courseLabel: getTokenGrantCourseLabel(courseKey, entry?.courseLabel),
+        addedAt: entry?.addedAt || new Date().toISOString(),
+        source: String(entry?.source || "admin_add_student"),
+        actorAddress: String(entry?.actorAddress || "").toLowerCase(),
+    };
+}
+
+function normalizeCourseStudents(rawMap = {}) {
+    const normalized = {};
+    Object.entries(rawMap || {}).forEach(([courseKey, entries]) => {
+        const normalizedCourseKey = normalizeTokenGrantCourseKey(courseKey);
+        const entryList = Array.isArray(entries) ? entries : Object.values(entries || {});
+        const deduped = new Map();
+        entryList.forEach((entry) => {
+            const normalizedEntry = normalizeCourseRosterEntry(entry, normalizedCourseKey);
+            if (!normalizedEntry) return;
+            deduped.set(normalizedEntry.address, normalizedEntry);
+        });
+        normalized[normalizedCourseKey] = Array.from(deduped.values())
+            .sort((left, right) => String(left.addedAt).localeCompare(String(right.addedAt)));
+    });
+    return normalized;
+}
+
 function normalizeQuizKey(quizKey = "") {
     const [sourceAddress = "", quizId = ""] = String(quizKey || "").split(":");
     return `${sourceAddress.toLowerCase()}:${quizId}`;
@@ -229,6 +261,11 @@ const server = http.createServer((req, res) => {
 
     if (req.url === "/token-grants" && req.method === "GET") {
         writeJson(res, 200, { ok: true, ledger: tokenGrantLedger });
+        return;
+    }
+
+    if (req.url === "/course-students" && req.method === "GET") {
+        writeJson(res, 200, { ok: true, courseStudents });
         return;
     }
 
@@ -331,6 +368,40 @@ const server = http.createServer((req, res) => {
                 };
                 persistState();
                 writeJson(res, 200, { ok: true, ledger: tokenGrantLedger });
+            })
+            .catch(() => {
+                writeJson(res, 400, { ok: false, error: "invalid_json" });
+            });
+        return;
+    }
+
+    if (req.url === "/course-students" && req.method === "POST") {
+        readRequestBody(req)
+            .then((body) => {
+                const courseKey = normalizeTokenGrantCourseKey(body?.courseKey || CURRENT_TOKEN_GRANT_COURSE_KEY);
+                const addresses = Array.isArray(body?.addresses) ? body.addresses : [body?.address].filter(Boolean);
+                const currentEntries = Array.isArray(courseStudents[courseKey]) ? courseStudents[courseKey] : [];
+                const deduped = new Map(currentEntries.map((entry) => [String(entry.address || "").toLowerCase(), entry]));
+
+                addresses.forEach((address) => {
+                    const nextEntry = normalizeCourseRosterEntry({
+                        address,
+                        courseKey,
+                        courseLabel: body?.payload?.courseLabel,
+                        addedAt: body?.payload?.addedAt || new Date().toISOString(),
+                        source: body?.payload?.source || "admin_add_student",
+                        actorAddress: body?.payload?.actorAddress || "",
+                    }, courseKey);
+                    if (!nextEntry) return;
+                    deduped.set(nextEntry.address, nextEntry);
+                });
+
+                courseStudents = normalizeCourseStudents({
+                    ...courseStudents,
+                    [courseKey]: Array.from(deduped.values()),
+                });
+                persistState();
+                writeJson(res, 200, { ok: true, courseStudents });
             })
             .catch(() => {
                 writeJson(res, 400, { ok: false, error: "invalid_json" });
@@ -596,6 +667,7 @@ function persistState() {
             surveyRewardEntries,
             deletedQuizzes,
             pendingCreatedQuizzes,
+            courseStudents,
             activityLogs,
             deletedBoardMessagesBySession: Object.fromEntries(
                 Object.entries(deletedBoardMessagesBySession).map(([sessionId, entries]) => [
@@ -633,6 +705,7 @@ function loadPersistedState() {
         surveyRewardEntries = normalizeSurveyRewardEntries(payload?.surveyRewardEntries);
         deletedQuizzes = normalizeDeletedQuizzes(payload?.deletedQuizzes && typeof payload.deletedQuizzes === "object" ? payload.deletedQuizzes : {});
         pendingCreatedQuizzes = normalizePendingCreatedQuizzes(payload?.pendingCreatedQuizzes && typeof payload.pendingCreatedQuizzes === "object" ? payload.pendingCreatedQuizzes : {});
+        courseStudents = normalizeCourseStudents(payload?.courseStudents && typeof payload.courseStudents === "object" ? payload.courseStudents : {});
         activityLogs = normalizeActivityLogs(payload?.activityLogs);
         deletedBoardMessagesBySession = Object.fromEntries(
             Object.entries(payload?.deletedBoardMessagesBySession || {}).map(([sessionId, entries]) => [

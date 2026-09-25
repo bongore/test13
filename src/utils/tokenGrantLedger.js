@@ -9,8 +9,40 @@ const TOKEN_GRANT_KEYS = {
     TTT: "board_ttt",
 };
 
+const TOKEN_GRANT_COURSES = {
+    APPLIED_MATH: {
+        key: "applied_math_2026",
+        label: "応用数学",
+        legacy: true,
+    },
+    INFORMATION_THEORY: {
+        key: "information_theory_2026",
+        label: "情報理論",
+        legacy: false,
+    },
+};
+
+const LEGACY_TOKEN_GRANT_COURSE_KEY = TOKEN_GRANT_COURSES.APPLIED_MATH.key;
+const LEGACY_TOKEN_GRANT_COURSE_LABEL = TOKEN_GRANT_COURSES.APPLIED_MATH.label;
+const CURRENT_TOKEN_GRANT_COURSE_KEY = TOKEN_GRANT_COURSES.INFORMATION_THEORY.key;
+const CURRENT_TOKEN_GRANT_COURSE_LABEL = TOKEN_GRANT_COURSES.INFORMATION_THEORY.label;
+
 function normalizeAddress(address) {
     return String(address || "").toLowerCase();
+}
+
+function normalizeCourseKey(courseKey = "") {
+    return String(courseKey || LEGACY_TOKEN_GRANT_COURSE_KEY)
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9_-]+/g, "_")
+        .replace(/^_+|_+$/g, "") || LEGACY_TOKEN_GRANT_COURSE_KEY;
+}
+
+function getCourseLabel(courseKey = "", fallbackLabel = "") {
+    const normalizedCourseKey = normalizeCourseKey(courseKey);
+    const matched = Object.values(TOKEN_GRANT_COURSES).find((course) => course.key === normalizedCourseKey);
+    return String(fallbackLabel || matched?.label || normalizedCourseKey);
 }
 
 function inferHistoryType(record = {}) {
@@ -21,6 +53,7 @@ function inferHistoryType(record = {}) {
 }
 
 function normalizeHistoryEntry(entry = {}) {
+    const courseKey = normalizeCourseKey(entry?.courseKey || entry?.lectureKey || entry?.course || LEGACY_TOKEN_GRANT_COURSE_KEY);
     return {
         type: entry?.type || inferHistoryType(entry),
         at: entry?.at || entry?.grantedAt || new Date().toISOString(),
@@ -29,6 +62,8 @@ function normalizeHistoryEntry(entry = {}) {
         source: entry?.source || "",
         confirmed: entry?.confirmed !== false,
         active: entry?.active !== false,
+        courseKey,
+        courseLabel: getCourseLabel(courseKey, entry?.courseLabel || entry?.lectureLabel),
     };
 }
 
@@ -46,6 +81,33 @@ function normalizeGrantRecord(record = null) {
         source: record.source || "",
         confirmed: record.confirmed !== false,
         active: record.active !== false,
+        courseKey: normalizeCourseKey(record.courseKey || history[history.length - 1]?.courseKey || LEGACY_TOKEN_GRANT_COURSE_KEY),
+        courseLabel: getCourseLabel(record.courseKey || history[history.length - 1]?.courseKey, record.courseLabel || history[history.length - 1]?.courseLabel),
+        history,
+    };
+}
+
+function getGrantRecordForCourse(record = null, courseKey = CURRENT_TOKEN_GRANT_COURSE_KEY) {
+    const normalizedRecord = normalizeGrantRecord(record);
+    if (!normalizedRecord) return null;
+    const normalizedCourseKey = normalizeCourseKey(courseKey);
+    const courseHistory = (normalizedRecord.history || [])
+        .filter((entry) => normalizeCourseKey(entry?.courseKey) === normalizedCourseKey)
+        .map((entry) => normalizeHistoryEntry(entry));
+    if (courseHistory.length === 0) return null;
+
+    const history = courseHistory.sort((left, right) => String(left.at).localeCompare(String(right.at)));
+    const latestEntry = history[history.length - 1];
+    const latestTxEntry = [...history].reverse().find((entry) => entry.txHash);
+    return {
+        grantedAt: latestEntry.at || "",
+        amount: latestEntry.amount ?? null,
+        txHash: latestEntry.txHash || latestTxEntry?.txHash || "",
+        source: latestEntry.source || "",
+        confirmed: latestEntry.confirmed !== false,
+        active: latestEntry.active !== false,
+        courseKey: normalizedCourseKey,
+        courseLabel: getCourseLabel(normalizedCourseKey, latestEntry.courseLabel),
         history,
     };
 }
@@ -90,9 +152,16 @@ function writeGrantLedger(nextLedger) {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(normalizeLedger(nextLedger)));
 }
 
-function getAddressGrantStatus(address) {
+function getAddressGrantStatus(address, courseKey = "") {
     const ledger = readGrantLedger();
-    return ledger[normalizeAddress(address)] || {};
+    const status = ledger[normalizeAddress(address)] || {};
+    if (!courseKey) return status;
+
+    return Object.fromEntries(
+        Object.values(TOKEN_GRANT_KEYS)
+            .map((assetKey) => [assetKey, getGrantRecordForCourse(status?.[assetKey], courseKey)])
+            .filter(([, record]) => Boolean(record))
+    );
 }
 
 function mergeGrantRecord(currentRecord, nextRecord) {
@@ -213,8 +282,8 @@ function isGrantReserved(record) {
     return Boolean(isGrantActive(record) || isGrantPending(record));
 }
 
-function hasGrantedToken(address, assetKey) {
-    const status = getAddressGrantStatus(address);
+function hasGrantedToken(address, assetKey, courseKey = "") {
+    const status = getAddressGrantStatus(address, courseKey);
     return isGrantReserved(status?.[assetKey]);
 }
 
@@ -232,6 +301,8 @@ function markGrantedToken(address, assetKey, payload = {}) {
         source: payload.source || "",
         confirmed: payload.confirmed !== false,
         active: true,
+        courseKey: payload.courseKey || CURRENT_TOKEN_GRANT_COURSE_KEY,
+        courseLabel: payload.courseLabel || CURRENT_TOKEN_GRANT_COURSE_LABEL,
     });
     history.push(nextEntry);
 
@@ -244,6 +315,8 @@ function markGrantedToken(address, assetKey, payload = {}) {
             source: nextEntry.source,
             confirmed: nextEntry.confirmed,
             active: true,
+            courseKey: nextEntry.courseKey,
+            courseLabel: nextEntry.courseLabel,
             history,
         },
     };
@@ -268,6 +341,8 @@ function clearGrantedToken(address, assetKey, payload = {}) {
         source: payload.source || "manual_clear",
         confirmed: true,
         active: false,
+        courseKey: payload.courseKey || CURRENT_TOKEN_GRANT_COURSE_KEY,
+        courseLabel: payload.courseLabel || CURRENT_TOKEN_GRANT_COURSE_LABEL,
     });
     history.push(nextEntry);
 
@@ -280,6 +355,8 @@ function clearGrantedToken(address, assetKey, payload = {}) {
             source: nextEntry.source,
             confirmed: true,
             active: false,
+            courseKey: nextEntry.courseKey,
+            courseLabel: nextEntry.courseLabel,
             history,
         },
     };
@@ -288,18 +365,32 @@ function clearGrantedToken(address, assetKey, payload = {}) {
     return ledger;
 }
 
-function getGrantLedgerEntries() {
+function getGrantLedgerEntries(courseKey = "") {
     const ledger = readGrantLedger();
-    return Object.entries(ledger).map(([address, status]) => ({
-        address,
-        status: status || {},
-    }));
+    return Object.entries(ledger)
+        .map(([address, status]) => ({
+            address,
+            status: courseKey
+                ? Object.fromEntries(
+                    Object.values(TOKEN_GRANT_KEYS)
+                        .map((assetKey) => [assetKey, getGrantRecordForCourse(status?.[assetKey], courseKey)])
+                        .filter(([, record]) => Boolean(record))
+                )
+                : (status || {}),
+        }))
+        .filter((entry) => !courseKey || Object.keys(entry.status || {}).length > 0);
 }
 
 export {
+    CURRENT_TOKEN_GRANT_COURSE_KEY,
+    CURRENT_TOKEN_GRANT_COURSE_LABEL,
+    LEGACY_TOKEN_GRANT_COURSE_KEY,
+    LEGACY_TOKEN_GRANT_COURSE_LABEL,
+    TOKEN_GRANT_COURSES,
     TOKEN_GRANT_KEYS,
     readGrantLedger,
     getAddressGrantStatus,
+    getGrantRecordForCourse,
     hasGrantedToken,
     isGrantActive,
     isGrantReserved,
@@ -311,4 +402,5 @@ export {
     removeGrantRecordFromServer,
     mergeGrantLedger,
     normalizeGrantRecord,
+    normalizeCourseKey,
 };

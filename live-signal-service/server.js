@@ -16,6 +16,10 @@ let surveyRewardEntries = [];
 let deletedQuizzes = {};
 let pendingCreatedQuizzes = {};
 let activityLogs = [];
+const LEGACY_TOKEN_GRANT_COURSE_KEY = "applied_math_2026";
+const LEGACY_TOKEN_GRANT_COURSE_LABEL = "応用数学";
+const CURRENT_TOKEN_GRANT_COURSE_KEY = "information_theory_2026";
+const CURRENT_TOKEN_GRANT_COURSE_LABEL = "情報理論";
 
 function normalizeRewardPayoutEntry(entry = {}) {
     return {
@@ -90,7 +94,24 @@ function inferGrantHistoryType(source = "", isRemove = false) {
     return "grant";
 }
 
+function normalizeTokenGrantCourseKey(courseKey = "") {
+    return String(courseKey || LEGACY_TOKEN_GRANT_COURSE_KEY)
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9_-]+/g, "_")
+        .replace(/^_+|_+$/g, "") || LEGACY_TOKEN_GRANT_COURSE_KEY;
+}
+
+function getTokenGrantCourseLabel(courseKey = "", fallbackLabel = "") {
+    const normalizedCourseKey = normalizeTokenGrantCourseKey(courseKey);
+    if (fallbackLabel) return String(fallbackLabel);
+    if (normalizedCourseKey === CURRENT_TOKEN_GRANT_COURSE_KEY) return CURRENT_TOKEN_GRANT_COURSE_LABEL;
+    if (normalizedCourseKey === LEGACY_TOKEN_GRANT_COURSE_KEY) return LEGACY_TOKEN_GRANT_COURSE_LABEL;
+    return normalizedCourseKey;
+}
+
 function normalizeHistoryEntry(entry = {}) {
+    const courseKey = normalizeTokenGrantCourseKey(entry?.courseKey || entry?.lectureKey || entry?.course || LEGACY_TOKEN_GRANT_COURSE_KEY);
     return {
         type: entry?.type || inferGrantHistoryType(entry?.source, entry?.active === false),
         at: entry?.at || entry?.grantedAt || new Date().toISOString(),
@@ -99,6 +120,8 @@ function normalizeHistoryEntry(entry = {}) {
         source: entry?.source || "",
         confirmed: entry?.confirmed !== false,
         active: entry?.active !== false,
+        courseKey,
+        courseLabel: getTokenGrantCourseLabel(courseKey, entry?.courseLabel || entry?.lectureLabel),
     };
 }
 
@@ -115,6 +138,8 @@ function normalizeGrantRecord(record = null) {
         source: record.source || "",
         confirmed: record.confirmed !== false,
         active: record.active !== false,
+        courseKey: normalizeTokenGrantCourseKey(record.courseKey || history[history.length - 1]?.courseKey || LEGACY_TOKEN_GRANT_COURSE_KEY),
+        courseLabel: getTokenGrantCourseLabel(record.courseKey || history[history.length - 1]?.courseKey, record.courseLabel || history[history.length - 1]?.courseLabel),
         history,
     };
 }
@@ -256,6 +281,8 @@ const server = http.createServer((req, res) => {
                         source: body?.payload?.source || "manual_clear",
                         confirmed: true,
                         active: false,
+                        courseKey: body?.payload?.courseKey || CURRENT_TOKEN_GRANT_COURSE_KEY,
+                        courseLabel: body?.payload?.courseLabel || CURRENT_TOKEN_GRANT_COURSE_LABEL,
                     });
                     tokenGrantLedger[address] = {
                         ...(tokenGrantLedger[address] || {}),
@@ -266,6 +293,8 @@ const server = http.createServer((req, res) => {
                             source: nextEntry.source,
                             confirmed: true,
                             active: false,
+                            courseKey: nextEntry.courseKey,
+                            courseLabel: nextEntry.courseLabel,
                             history: [...(currentRecord.history || []), nextEntry],
                         },
                     };
@@ -283,6 +312,8 @@ const server = http.createServer((req, res) => {
                     source: body?.payload?.source || "",
                     confirmed: body?.payload?.confirmed !== false,
                     active: true,
+                    courseKey: body?.payload?.courseKey || CURRENT_TOKEN_GRANT_COURSE_KEY,
+                    courseLabel: body?.payload?.courseLabel || CURRENT_TOKEN_GRANT_COURSE_LABEL,
                 });
                 tokenGrantLedger[address] = {
                     ...(tokenGrantLedger[address] || {}),
@@ -293,6 +324,8 @@ const server = http.createServer((req, res) => {
                         source: nextEntry.source,
                         confirmed: nextEntry.confirmed,
                         active: true,
+                        courseKey: nextEntry.courseKey,
+                        courseLabel: nextEntry.courseLabel,
                         history: [...(currentRecord?.history || []), nextEntry],
                     },
                 };

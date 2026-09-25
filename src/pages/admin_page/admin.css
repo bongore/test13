@@ -82,6 +82,73 @@
   margin-top: 0;
 }
 
+.token-grant-course-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-3);
+}
+
+.token-grant-course-tab {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-secondary);
+  padding: 10px 14px;
+  min-width: 150px;
+  cursor: pointer;
+}
+
+.token-grant-course-tab.active {
+  color: var(--text-primary);
+  border-color: rgba(14, 165, 233, 0.45);
+  background: rgba(14, 165, 233, 0.16);
+}
+
+.token-grant-course-tab span {
+  font-weight: var(--font-weight-semibold);
+}
+
+.token-grant-course-tab small {
+  font-size: 11px;
+}
+
+.token-grant-course-note {
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+  margin-bottom: var(--space-5);
+}
+
+.token-grant-asset-selector {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
+}
+
+.token-grant-asset-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--text-primary);
+  font-size: var(--font-size-xs);
+  cursor: pointer;
+}
+
+.token-grant-availability {
+  color: #bfdbfe;
+  font-size: 12px;
+  margin-top: var(--space-2);
+}
+
 .token-grant-secondary-btn {
   background: rgba(255, 255, 255, 0.08) !important;
   color: var(--text-primary) !important;

@@ -20,6 +20,40 @@ import "./create_quiz.css";
 const CREATE_QUIZ_DRAFT_KEY = "create_quiz_form_v1";
 const CREATE_QUIZ_BATCH_DRAFT_KEY = "create_quiz_batch_v1";
 
+const getCreateQuizErrorMessage = (error) => {
+    const rawMessage = String(error?.shortMessage || error?.message || "");
+    const message = rawMessage.toLowerCase();
+
+    if (error?.code === 4001 || message.includes("user rejected")) {
+        return "MetaMask 側で操作がキャンセルされました。もう一度投稿する場合は、MetaMask の確認画面で承認してください。";
+    }
+    if (message.includes("wallet_not_connected") || message.includes("ethereum_not_found")) {
+        return "MetaMask に接続できていません。ウォレットを有効化して、このページを再読み込みしてから再度投稿してください。";
+    }
+    if (message.includes("amoy_network_unavailable") || message.includes("amoy_network_switch_failed")) {
+        return "Polygon Amoy Testnet に切り替えられませんでした。MetaMask のネットワーク設定を確認してから再度投稿してください。";
+    }
+    if (
+        message.includes("rpc endpoint")
+        || message.includes("too many errors")
+        || message.includes("endpoint returned too many errors")
+        || message.includes("rpc endpoint not found")
+        || message.includes("rpc")
+        || message.includes("network connection")
+        || message.includes("failed to fetch")
+    ) {
+        return "Polygon Amoy の RPC が応答していません。MetaMask の Polygon Amoy RPC URL を https://polygon-amoy-bor-rpc.publicnode.com に更新してから、もう一度投稿してください。";
+    }
+    if (message.includes("approve_rejected")) {
+        return "報酬トークンの承認が完了しませんでした。MetaMask の承認画面を確認してから再度投稿してください。";
+    }
+    if (message.includes("create_quiz_rejected")) {
+        return "問題作成トランザクションが送信されませんでした。MetaMask の確認画面を確認してから再度投稿してください。";
+    }
+
+    return rawMessage || "問題作成に失敗しました。MetaMask の承認状態と教員権限を確認してください。";
+};
+
 function Create_quiz() {
     const navigate = useNavigate();
     const [useing_address, Set_useing_address] = useState(null);
@@ -214,7 +248,7 @@ function Create_quiz() {
             }
         } catch (error) {
             console.error("Failed to create quiz", error);
-            alert(error?.shortMessage || error?.message || "問題作成に失敗しました。MetaMask の承認状態と教員権限を確認してください。");
+            alert(getCreateQuizErrorMessage(error));
             return;
         } finally {
             setIsSubmitting(false);

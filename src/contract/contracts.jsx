@@ -133,7 +133,15 @@ function isProviderLimitError(error) {
     return message.includes("request exceeds defined limit")
         || message.includes("rate limit")
         || message.includes("too many requests")
+        || message.includes("too many errors")
+        || message.includes("endpoint returned too many errors")
         || message.includes("limit exceeded");
+}
+
+function isUserRejectedRequest(error) {
+    return error?.code === 4001
+        || String(error?.message || "").toLowerCase().includes("user rejected")
+        || String(error?.shortMessage || "").toLowerCase().includes("user rejected");
 }
 
 function readScoreCache() {
@@ -1144,7 +1152,15 @@ class Contracts_MetaMask {
                 return await walletClient.writeContract(writeConfig);
             } catch (error) {
                 lastError = error;
-                if (!isProviderLimitError(error) || attempt >= 2) {
+                if (isUserRejectedRequest(error) || attempt >= 2) {
+                    throw error;
+                }
+                if (this.shouldRefreshAmoyRpc(error)) {
+                    await this.refreshAmoyRpcSettings(provider);
+                    await sleep(700 * (attempt + 1));
+                    continue;
+                }
+                if (!isProviderLimitError(error)) {
                     throw error;
                 }
                 await sleep(700 * (attempt + 1));
@@ -1460,6 +1476,49 @@ class Contracts_MetaMask {
         throw lastError || new Error("amoy_network_add_failed");
     }
 
+    async refreshAmoyRpcSettings(providerOverride = null) {
+        const provider = providerOverride || await this.getEthereumProviderReady();
+        if (!provider) return false;
+
+        const rpcUrls = this.getAmoyRpcCandidates();
+        const preferredRpcUrls = [
+            "https://polygon-amoy-bor-rpc.publicnode.com",
+            "https://polygon-amoy.drpc.org",
+            "https://api.zan.top/polygon-amoy",
+        ];
+        const orderedRpcUrls = Array.from(new Set([
+            ...preferredRpcUrls,
+            ...rpcUrls,
+        ].filter(Boolean)));
+
+        let lastError = null;
+        for (const rpcUrl of orderedRpcUrls) {
+            try {
+                await this.providerRequestWithRetry(provider, {
+                    method: "wallet_addEthereumChain",
+                    params: [this.getAmoyAddChainParams(rpcUrl)],
+                }, 1, 500);
+                await sleep(350);
+                const chainId = await this.read_chain_id_with_provider(provider);
+                if (chainId === amoy.id) {
+                    amoyReadyUntil = Date.now() + AMOY_READY_CACHE_TTL_MS;
+                }
+                return true;
+            } catch (error) {
+                lastError = error;
+                console.log(error);
+                if (isUserRejectedRequest(error)) {
+                    throw error;
+                }
+            }
+        }
+
+        if (lastError) {
+            throw lastError;
+        }
+        return false;
+    }
+
     async ensure_amoy_network() {
         const provider = await this.getEthereumProviderReady();
         if (!provider) return false;
@@ -1486,6 +1545,7 @@ class Contracts_MetaMask {
             if (error?.code === 4902 || String(error?.message || "").includes("4902") || this.shouldRefreshAmoyRpc(error)) {
                 const recheckedChainId = await this.read_chain_id_with_provider(provider);
                 if (recheckedChainId === amoy.id) {
+                    await this.refreshAmoyRpcSettings(provider);
                     amoyReadyUntil = Date.now() + AMOY_READY_CACHE_TTL_MS;
                     return true;
                 }
@@ -2464,6 +2524,11 @@ class Contracts_MetaMask {
                 throw new Error("ethereum_not_found");
             }
 
+            const onAmoy = await this.ensure_amoy_network();
+            if (!onAmoy) {
+                throw new Error("amoy_network_unavailable");
+            }
+
             let account = await this.get_address();
             if (!account) {
                 throw new Error("wallet_not_connected");
@@ -2482,14 +2547,14 @@ class Contracts_MetaMask {
                 if (!hash) {
                     throw new Error("approve_rejected");
                 }
-                res = await publicClient.waitForTransactionReceipt({ hash });
+                res = await this.waitForReceiptWithRetry(hash);
             }
 
             hash = await this._create_quiz(account, title, explanation, thumbnail_url, content, answer_type, answer_data, correct, reply_startline, reply_deadline, rewardWei, respondentLimit);
             if (!hash) {
                 throw new Error("create_quiz_rejected");
             }
-            res = await publicClient.waitForTransactionReceipt({ hash });
+            res = await this.waitForReceiptWithRetry(hash);
         } catch (err) {
             console.log(err);
             throw err;

@@ -565,6 +565,28 @@ describe("Contracts_MetaMask legacy quiz settlement", () => {
         expect(mockWriteContract).toHaveBeenCalledTimes(2);
     });
 
+    test("writeContractDirect refreshes Amoy RPC settings before retrying RPC endpoint errors", async () => {
+        const contract = new Contracts_MetaMask();
+        contract.getEthereumProviderReady = jest.fn().mockResolvedValue({});
+        contract.ensureWalletWriteReady = jest.fn().mockResolvedValue("0xabc");
+        contract.refreshAmoyRpcSettings = jest.fn().mockResolvedValue(true);
+        mockWriteContract
+            .mockRejectedValueOnce(new Error("RPC endpoint returned too many errors"))
+            .mockResolvedValueOnce("0xretry");
+
+        const hash = await contract.writeContractDirect({
+            account: "0xabc",
+            address: "0xdef",
+            abi: [],
+            functionName: "create_quiz",
+            args: [],
+        });
+
+        expect(hash).toBe("0xretry");
+        expect(contract.refreshAmoyRpcSettings).toHaveBeenCalledTimes(1);
+        expect(mockWriteContract).toHaveBeenCalledTimes(2);
+    });
+
     test("writeContractDirect keeps manual gas override as a minimum floor", async () => {
         const contract = new Contracts_MetaMask();
         contract.getEthereumProviderReady = jest.fn().mockResolvedValue({});

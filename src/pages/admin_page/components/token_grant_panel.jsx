@@ -2,12 +2,17 @@ import React, { useEffect, useMemo, useState } from "react";
 import { Form } from "react-bootstrap";
 import { ACTION_TYPES, appendActivityLog } from "../../../utils/activityLog";
 import {
+    CURRENT_TOKEN_GRANT_COURSE_KEY,
+    CURRENT_TOKEN_GRANT_COURSE_LABEL,
     clearGrantedToken,
     getAddressGrantStatus,
     getGrantLedgerEntries,
+    getGrantRecordForCourse,
     hasGrantedToken,
     isGrantActive,
     isGrantReserved,
+    LEGACY_TOKEN_GRANT_COURSE_KEY,
+    LEGACY_TOKEN_GRANT_COURSE_LABEL,
     markGrantedToken,
     normalizeGrantRecord,
     persistGrantRecordToServer,
@@ -62,11 +67,12 @@ function downloadTextFile(filename, content, mimeType) {
     URL.revokeObjectURL(url);
 }
 
-function getSelectedAssetTargets(polAmount, tftAmount, tttAmount) {
+function getSelectedAssetTargets(polAmount, tftAmount, tttAmount, enabledAssetKeys = []) {
+    const enabledSet = new Set(enabledAssetKeys);
     return [
-        { enabled: Number(polAmount || 0) > 0, assetKey: TOKEN_GRANT_KEYS.POL, amount: Number(polAmount || 0), label: "POL" },
-        { enabled: Number(tftAmount || 0) > 0, assetKey: TOKEN_GRANT_KEYS.TFT, amount: Number(tftAmount || 0), label: "TFT" },
-        { enabled: Number(tttAmount || 0) > 0, assetKey: TOKEN_GRANT_KEYS.TTT, amount: Number(tttAmount || 0), label: "TTT" },
+        { enabled: enabledSet.has(TOKEN_GRANT_KEYS.POL) && Number(polAmount || 0) > 0, assetKey: TOKEN_GRANT_KEYS.POL, amount: Number(polAmount || 0), label: "POL" },
+        { enabled: enabledSet.has(TOKEN_GRANT_KEYS.TFT) && Number(tftAmount || 0) > 0, assetKey: TOKEN_GRANT_KEYS.TFT, amount: Number(tftAmount || 0), label: "TFT" },
+        { enabled: enabledSet.has(TOKEN_GRANT_KEYS.TTT) && Number(tttAmount || 0) > 0, assetKey: TOKEN_GRANT_KEYS.TTT, amount: Number(tttAmount || 0), label: "TTT" },
     ];
 }
 
@@ -74,6 +80,21 @@ const ASSET_LABELS = [
     { key: TOKEN_GRANT_KEYS.POL, label: "POL" },
     { key: TOKEN_GRANT_KEYS.TFT, label: "TFT" },
     { key: TOKEN_GRANT_KEYS.TTT, label: "TTT" },
+];
+
+const TOKEN_GRANT_COURSE_TABS = [
+    {
+        key: CURRENT_TOKEN_GRANT_COURSE_KEY,
+        label: CURRENT_TOKEN_GRANT_COURSE_LABEL,
+        description: "今回の講義。ここで登録済み学生への履歴確認と報酬付与を行います。",
+        readOnly: false,
+    },
+    {
+        key: LEGACY_TOKEN_GRANT_COURSE_KEY,
+        label: LEGACY_TOKEN_GRANT_COURSE_LABEL,
+        description: "前回講義の配布履歴。情報理論の二重送金判定には使いません。",
+        readOnly: true,
+    },
 ];
 
 function isManualMarkedRecord(record) {
@@ -108,15 +129,26 @@ function Token_grant_panel(props) {
     const [surveyTftAmount, setSurveyTftAmount] = useState("50");
     const [surveyRewardEntries, setSurveyRewardEntries] = useState([]);
     const [surveyBulkAddresses, setSurveyBulkAddresses] = useState("");
+    const [activeCourseKey, setActiveCourseKey] = useState(CURRENT_TOKEN_GRANT_COURSE_KEY);
+    const [enabledAssetKeys, setEnabledAssetKeys] = useState([TOKEN_GRANT_KEYS.POL, TOKEN_GRANT_KEYS.TFT, TOKEN_GRANT_KEYS.TTT]);
 
     const typedAddresses = useMemo(() => normalizeAddressLines(bulkAddresses), [bulkAddresses]);
     const surveyTypedAddresses = useMemo(() => normalizeAddressLines(surveyBulkAddresses), [surveyBulkAddresses]);
+    const activeCourse = useMemo(
+        () => TOKEN_GRANT_COURSE_TABS.find((course) => course.key === activeCourseKey) || TOKEN_GRANT_COURSE_TABS[0],
+        [activeCourseKey]
+    );
+    const isCurrentCourseActive = activeCourseKey === CURRENT_TOKEN_GRANT_COURSE_KEY;
+    const activeGrantLedgerEntries = useMemo(
+        () => getGrantLedgerEntries(activeCourseKey),
+        [activeCourseKey, grantLedgerEntries]
+    );
     const manualGrantEntries = useMemo(
-        () => grantLedgerEntries.filter((entry) => ASSET_LABELS.some((item) => {
+        () => activeGrantLedgerEntries.filter((entry) => ASSET_LABELS.some((item) => {
             const record = normalizeGrantRecord(entry?.status?.[item.key]);
             return isGrantActive(record) && hasManualMarkHistory(record);
         })),
-        [grantLedgerEntries]
+        [activeGrantLedgerEntries]
     );
     const studentIndexMap = useMemo(
         () => new Map((students || []).map((address, index) => [props.cont.normalizeAddress(address), formatInternalId("USER", index)])),
@@ -125,9 +157,12 @@ function Token_grant_panel(props) {
     const tokenGrantExportRows = useMemo(() => (
         grantLedgerEntries.flatMap((entry) => (
             ASSET_LABELS.flatMap((asset) => {
-                const record = normalizeGrantRecord(entry?.status?.[asset.key]);
+                const fullRecord = normalizeGrantRecord(entry?.status?.[asset.key]);
+                const record = getGrantRecordForCourse(fullRecord, activeCourseKey);
                 const history = Array.isArray(record?.history) ? record.history : [];
                 return history.map((historyEntry, index) => ({
+                    course_key: historyEntry?.courseKey || record?.courseKey || activeCourseKey,
+                    course_label: historyEntry?.courseLabel || record?.courseLabel || activeCourse.label,
                     address: entry.address,
                     student_id: studentIndexMap.get(props.cont.normalizeAddress(entry.address)) || "",
                     student_name: studentNameMap[props.cont.normalizeAddress(entry.address)] || "",
@@ -150,7 +185,7 @@ function Token_grant_panel(props) {
                 }));
             })
         ))
-    ), [grantLedgerEntries, studentIndexMap, studentNameMap, props.cont]);
+    ), [activeCourse.label, activeCourseKey, grantLedgerEntries, studentIndexMap, studentNameMap, props.cont]);
     const surveyRewardStatusMap = useMemo(
         () => buildSurveyRewardStatusMap(surveyRewardEntries),
         [surveyRewardEntries]
@@ -188,12 +223,14 @@ function Token_grant_panel(props) {
     const combinedGrantExportRows = useMemo(() => {
         const starterRows = tokenGrantExportRows.map((row) => ({
             category: "starter_or_manual",
-            campaign_label: "",
+            campaign_label: row.course_label || "",
             campaign_key: "",
             ...row,
         }));
         const surveyRows = surveyRewardExportRows.map((row) => ({
             category: "survey_reward",
+            course_label: activeCourse.label,
+            course_key: activeCourseKey,
             address: row.address,
             student_id: row.student_id,
             student_name: row.student_name,
@@ -218,7 +255,7 @@ function Token_grant_panel(props) {
             category: "survey_reward",
         }));
         return [...starterRows, ...surveyRows];
-    }, [surveyRewardExportRows, tokenGrantExportRows]);
+    }, [activeCourse.label, activeCourseKey, surveyRewardExportRows, tokenGrantExportRows]);
 
     async function refreshGrantLedger() {
         try {
@@ -303,10 +340,27 @@ function Token_grant_panel(props) {
         ));
     }
 
+    function toggleAssetTarget(assetKey) {
+        setEnabledAssetKeys((current) => (
+            current.includes(assetKey)
+                ? current.filter((item) => item !== assetKey)
+                : [...current, assetKey]
+        ));
+    }
+
     function applyPreset() {
         setPolAmount("1");
         setTftAmount("50");
         setTttAmount("1000");
+        setEnabledAssetKeys([TOKEN_GRANT_KEYS.POL, TOKEN_GRANT_KEYS.TFT, TOKEN_GRANT_KEYS.TTT]);
+    }
+
+    function buildCourseGrantPayload(payload = {}) {
+        return {
+            ...payload,
+            courseKey: activeCourseKey,
+            courseLabel: activeCourse.label,
+        };
     }
 
     function buildGrantPlan(addresses) {
@@ -320,9 +374,9 @@ function Token_grant_panel(props) {
         const plan = normalizedTargets.map((address) => ({
             address,
             shouldGrant: {
-                POL: requestedAmounts.POL > 0 && !hasGrantedToken(address, TOKEN_GRANT_KEYS.POL),
-                TFT: requestedAmounts.TFT > 0 && !hasGrantedToken(address, TOKEN_GRANT_KEYS.TFT),
-                TTT: requestedAmounts.TTT > 0 && !hasGrantedToken(address, TOKEN_GRANT_KEYS.TTT),
+                POL: enabledAssetKeys.includes(TOKEN_GRANT_KEYS.POL) && requestedAmounts.POL > 0 && !hasGrantedToken(address, TOKEN_GRANT_KEYS.POL, activeCourseKey),
+                TFT: enabledAssetKeys.includes(TOKEN_GRANT_KEYS.TFT) && requestedAmounts.TFT > 0 && !hasGrantedToken(address, TOKEN_GRANT_KEYS.TFT, activeCourseKey),
+                TTT: enabledAssetKeys.includes(TOKEN_GRANT_KEYS.TTT) && requestedAmounts.TTT > 0 && !hasGrantedToken(address, TOKEN_GRANT_KEYS.TTT, activeCourseKey),
             },
         }));
 
@@ -334,6 +388,10 @@ function Token_grant_panel(props) {
     }
 
     async function markAddressesAsAlreadyGranted(addresses, sourceLabel) {
+        if (!isCurrentCourseActive) {
+            alert(`${activeCourse.label} タブは履歴確認用です。付与操作は ${CURRENT_TOKEN_GRANT_COURSE_LABEL} タブで実行してください。`);
+            return;
+        }
         const synced = await refreshGrantLedger();
         if (!synced) {
             alert("付与履歴を同期できないため、既付与登録も停止しました。少し待ってから再試行してください。");
@@ -349,18 +407,18 @@ function Token_grant_panel(props) {
         setIsSubmitting(true);
         try {
             for (const address of normalizedTargets) {
-                const targets = getSelectedAssetTargets(polAmount, tftAmount, tttAmount);
+                const targets = getSelectedAssetTargets(polAmount, tftAmount, tttAmount, enabledAssetKeys);
 
                 for (const target of targets) {
-                    if (!target.enabled || hasGrantedToken(address, target.assetKey)) continue;
+                    if (!target.enabled || hasGrantedToken(address, target.assetKey, activeCourseKey)) continue;
 
-                    const payload = {
+                    const payload = buildCourseGrantPayload({
                         grantedAt: new Date().toISOString(),
                         amount: target.amount,
                         txHash: "",
                         source: `${sourceLabel}_manual_mark`,
                         confirmed: true,
-                    };
+                    });
                     markGrantedToken(address, target.assetKey, payload);
                     await persistGrantRecordToServer(address, target.assetKey, payload);
                 }
@@ -377,6 +435,10 @@ function Token_grant_panel(props) {
     }
 
     async function clearAlreadyGrantedMarks(addresses, sourceLabel) {
+        if (!isCurrentCourseActive) {
+            alert(`${activeCourse.label} タブは履歴確認用です。付与操作は ${CURRENT_TOKEN_GRANT_COURSE_LABEL} タブで実行してください。`);
+            return;
+        }
         const synced = await refreshGrantLedger();
         if (!synced) {
             alert("付与履歴を同期できないため、既付与解除も停止しました。少し待ってから再試行してください。");
@@ -389,7 +451,7 @@ function Token_grant_panel(props) {
             return;
         }
 
-        const targets = getSelectedAssetTargets(polAmount, tftAmount, tttAmount).filter((target) => target.enabled);
+        const targets = getSelectedAssetTargets(polAmount, tftAmount, tttAmount, enabledAssetKeys).filter((target) => target.enabled);
         if (targets.length === 0) {
             alert("解除したい資産の数量を 0 より大きくしてください。");
             return;
@@ -400,16 +462,16 @@ function Token_grant_panel(props) {
             let removedCount = 0;
 
             for (const address of normalizedTargets) {
-                const status = getAddressGrantStatus(address);
+                const status = getAddressGrantStatus(address, activeCourseKey);
                 for (const target of targets) {
                     const currentRecord = status?.[target.assetKey];
                     if (!currentRecord) continue;
 
-                    const clearPayload = {
+                    const clearPayload = buildCourseGrantPayload({
                         grantedAt: new Date().toISOString(),
                         amount: currentRecord?.amount ?? target.amount,
                         source: `${sourceLabel}_clear_manual_mark`,
-                    };
+                    });
                     clearGrantedToken(address, target.assetKey, clearPayload);
                     await removeGrantRecordFromServer(address, target.assetKey, clearPayload);
                     removedCount += 1;
@@ -440,6 +502,10 @@ function Token_grant_panel(props) {
     }
 
     async function grantToAddresses(addresses, sourceLabel) {
+        if (!isCurrentCourseActive) {
+            alert(`${activeCourse.label} タブは履歴確認用です。付与操作は ${CURRENT_TOKEN_GRANT_COURSE_LABEL} タブで実行してください。`);
+            return;
+        }
         const synced = await refreshGrantLedger();
         if (!synced) {
             alert("付与履歴をサーバーと同期できなかったため、二重送金防止のため送金を止めました。少し待ってから再試行してください。");
@@ -466,16 +532,17 @@ function Token_grant_panel(props) {
                     item.shouldGrant.POL ? requestedAmounts.POL : 0,
                     item.shouldGrant.TFT ? requestedAmounts.TFT : 0,
                     item.shouldGrant.TTT ? requestedAmounts.TTT : 0,
+                    enabledAssetKeys,
                 ).filter((target) => target.enabled);
 
                 for (const target of pendingTargets) {
-                    const pendingPayload = {
+                    const pendingPayload = buildCourseGrantPayload({
                         grantedAt: new Date().toISOString(),
                         amount: target.amount,
                         txHash: "",
                         source: `${sourceLabel}_pending`,
                         confirmed: false,
-                    };
+                    });
                     markGrantedToken(item.address, target.assetKey, pendingPayload);
                     await persistGrantRecordToServer(item.address, target.assetKey, pendingPayload);
                 }
@@ -498,23 +565,23 @@ function Token_grant_panel(props) {
                                     : TOKEN_GRANT_KEYS.TTT;
                         settledAssetKeys.add(assetKey);
 
-                        const payload = {
+                        const payload = buildCourseGrantPayload({
                             grantedAt: new Date().toISOString(),
                             amount: result.amount,
                             txHash: result.hash,
                             source: sourceLabel,
                             confirmed: result.confirmed !== false,
-                        };
+                        });
 
                         if (result.confirmed !== false) {
                             markGrantedToken(item.address, assetKey, payload);
                             await persistGrantRecordToServer(item.address, assetKey, payload);
                         } else {
-                            const clearPayload = {
+                            const clearPayload = buildCourseGrantPayload({
                                 grantedAt: new Date().toISOString(),
                                 amount: result.amount,
                                 source: `${sourceLabel}_rollback_pending`,
-                            };
+                            });
                             clearGrantedToken(item.address, assetKey, clearPayload);
                             await removeGrantRecordFromServer(item.address, assetKey, clearPayload);
                         }
@@ -522,21 +589,21 @@ function Token_grant_panel(props) {
 
                     for (const target of pendingTargets) {
                         if (settledAssetKeys.has(target.assetKey)) continue;
-                        const clearPayload = {
+                        const clearPayload = buildCourseGrantPayload({
                             grantedAt: new Date().toISOString(),
                             amount: target.amount,
                             source: `${sourceLabel}_rollback_pending`,
-                        };
+                        });
                         clearGrantedToken(item.address, target.assetKey, clearPayload);
                         await removeGrantRecordFromServer(item.address, target.assetKey, clearPayload);
                     }
                 } catch (error) {
                     for (const target of pendingTargets) {
-                        const clearPayload = {
+                        const clearPayload = buildCourseGrantPayload({
                             grantedAt: new Date().toISOString(),
                             amount: target.amount,
                             source: `${sourceLabel}_rollback_pending`,
-                        };
+                        });
                         clearGrantedToken(item.address, target.assetKey, clearPayload);
                         await removeGrantRecordFromServer(item.address, target.assetKey, clearPayload);
                     }
@@ -593,7 +660,7 @@ function Token_grant_panel(props) {
     }
 
     function renderGrantStatusSummary(address) {
-        const status = getAddressGrantStatus(address);
+        const status = getAddressGrantStatus(address, activeCourseKey);
 
         return (
             <div className="token-grant-status-list">
@@ -617,7 +684,7 @@ function Token_grant_panel(props) {
     }
 
     function renderGrantStatusDetails(address) {
-        const status = getAddressGrantStatus(address);
+        const status = getAddressGrantStatus(address, activeCourseKey);
 
         return (
             <div className="token-grant-status-list detailed">
@@ -639,6 +706,7 @@ function Token_grant_panel(props) {
                             {record ? (
                                 <div className="token-grant-status-meta">
                                     <div>状態: {isGrantActive(record) ? (isManualMarkedRecord(record) ? "過去配布済みとして登録（送金なし）" : "送金確認済み") : isGrantReserved(record) ? "送金処理中" : "現在は未付与"}</div>
+                                    <div>講義: {record.courseLabel || activeCourse.label}</div>
                                     <div>現在状態の時刻: {formatDateTime(record.grantedAt)}</div>
                                     <div>
                                         現在状態の Tx:
@@ -664,6 +732,8 @@ function Token_grant_panel(props) {
                                                     {formatDateTime(entry.at)}
                                                     {" / "}
                                                     {entry.type === "manual_mark" ? "既付与登録" : entry.type === "clear" ? "既付与解除" : "送金確認"}
+                                                    {" / "}
+                                                    {entry.courseLabel || activeCourse.label}
                                                     {" / "}
                                                     {entry.txHash ? (
                                                         <a
@@ -822,7 +892,7 @@ function Token_grant_panel(props) {
     }
 
     function renderManualGrantAssets(address) {
-        const status = getAddressGrantStatus(address);
+        const status = getAddressGrantStatus(address, activeCourseKey);
         const manualAssets = ASSET_LABELS
             .filter((item) => {
                 const record = normalizeGrantRecord(status?.[item.key]);
@@ -869,6 +939,19 @@ function Token_grant_panel(props) {
         );
     }
 
+    function getGrantableAssetLabels(address) {
+        const requestedAmounts = {
+            [TOKEN_GRANT_KEYS.POL]: Number(polAmount || 0),
+            [TOKEN_GRANT_KEYS.TFT]: Number(tftAmount || 0),
+            [TOKEN_GRANT_KEYS.TTT]: Number(tttAmount || 0),
+        };
+        return ASSET_LABELS.filter((asset) => (
+            enabledAssetKeys.includes(asset.key)
+            && requestedAmounts[asset.key] > 0
+            && !hasGrantedToken(address, asset.key, activeCourseKey)
+        )).map((asset) => asset.label);
+    }
+
     function handleExportTokenGrantJson() {
         downloadTextFile(
             `token_grant_history_${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.json`,
@@ -880,6 +963,8 @@ function Token_grant_panel(props) {
     function handleExportTokenGrantCsv() {
         const header = [
             "category",
+            "course_label",
+            "course_key",
             "campaign_label",
             "campaign_key",
             "address",
@@ -1091,6 +1176,23 @@ function Token_grant_panel(props) {
                 </div>
             )}
 
+            <div className="token-grant-course-tabs">
+                {TOKEN_GRANT_COURSE_TABS.map((course) => (
+                    <button
+                        key={course.key}
+                        type="button"
+                        className={`token-grant-course-tab ${activeCourseKey === course.key ? "active" : ""}`}
+                        onClick={() => setActiveCourseKey(course.key)}
+                    >
+                        <span>{course.label}</span>
+                        <small>{course.readOnly ? "履歴確認" : "今回の配布"}</small>
+                    </button>
+                ))}
+            </div>
+            <div className="token-grant-course-note">
+                {activeCourse.description}
+            </div>
+
             <div className="token-grant-grid">
                 <div className="token-grant-card">
                     <div className="token-grant-card-title">付与レート</div>
@@ -1099,6 +1201,19 @@ function Token_grant_panel(props) {
                     </div>
                     <div className="token-grant-card-desc" style={{ color: "#ffd8a8" }}>
                         「既付与登録」は送金ではなく、過去にすでに配布済みだった学生を二重送金対象から外すための印です。間違えた場合はあとで解除できます。
+                    </div>
+                    <div className="token-grant-asset-selector" aria-label="付与対象">
+                        {ASSET_LABELS.map((asset) => (
+                            <label key={asset.key} className="token-grant-asset-option">
+                                <input
+                                    type="checkbox"
+                                    checked={enabledAssetKeys.includes(asset.key)}
+                                    onChange={() => toggleAssetTarget(asset.key)}
+                                    disabled={!isCurrentCourseActive}
+                                />
+                                <span>{asset.label}</span>
+                            </label>
+                        ))}
                     </div>
                     <div className="token-grant-inputs">
                         <Form.Group style={{ textAlign: "left" }}>
@@ -1115,7 +1230,7 @@ function Token_grant_panel(props) {
                         </Form.Group>
                     </div>
                     <div className="token-grant-actions">
-                        <button className="btn-action" type="button" onClick={applyPreset}>
+                        <button className="btn-action" type="button" disabled={!isCurrentCourseActive} onClick={applyPreset}>
                             標準値に戻す
                         </button>
                     </div>
@@ -1140,13 +1255,13 @@ function Token_grant_panel(props) {
                         </>
                     )}
                     <div className="token-grant-actions">
-                        <button className="btn-action" type="button" disabled={isSubmitting} onClick={() => grantToAddresses([singleAddress], "single")}>
+                        <button className="btn-action" type="button" disabled={isSubmitting || !isCurrentCourseActive} onClick={() => grantToAddresses([singleAddress], "single")}>
                             1件に付与
                         </button>
-                        <button className="btn-action token-grant-secondary-btn" type="button" disabled={isSubmitting} onClick={() => markAddressesAsAlreadyGranted([singleAddress], "single")}>
+                        <button className="btn-action token-grant-secondary-btn" type="button" disabled={isSubmitting || !isCurrentCourseActive} onClick={() => markAddressesAsAlreadyGranted([singleAddress], "single")}>
                             既付与として登録
                         </button>
-                        <button className="btn-action token-grant-secondary-btn" type="button" disabled={isSubmitting} onClick={() => clearAlreadyGrantedMarks([singleAddress], "single")}>
+                        <button className="btn-action token-grant-secondary-btn" type="button" disabled={isSubmitting || !isCurrentCourseActive} onClick={() => clearAlreadyGrantedMarks([singleAddress], "single")}>
                             既付与登録を解除
                         </button>
                     </div>
@@ -1167,13 +1282,13 @@ function Token_grant_panel(props) {
                     />
                 </Form.Group>
                 <div className="token-grant-actions">
-                    <button className="btn-action" type="button" disabled={isSubmitting} onClick={() => grantToAddresses(typedAddresses, "bulk_input")}>
+                    <button className="btn-action" type="button" disabled={isSubmitting || !isCurrentCourseActive} onClick={() => grantToAddresses(typedAddresses, "bulk_input")}>
                         入力済みアドレスへ一括付与
                     </button>
-                    <button className="btn-action token-grant-secondary-btn" type="button" disabled={isSubmitting} onClick={() => markAddressesAsAlreadyGranted(typedAddresses, "bulk_input")}>
+                    <button className="btn-action token-grant-secondary-btn" type="button" disabled={isSubmitting || !isCurrentCourseActive} onClick={() => markAddressesAsAlreadyGranted(typedAddresses, "bulk_input")}>
                         入力済みアドレスを既付与登録
                     </button>
-                    <button className="btn-action token-grant-secondary-btn" type="button" disabled={isSubmitting} onClick={() => clearAlreadyGrantedMarks(typedAddresses, "bulk_input")}>
+                    <button className="btn-action token-grant-secondary-btn" type="button" disabled={isSubmitting || !isCurrentCourseActive} onClick={() => clearAlreadyGrantedMarks(typedAddresses, "bulk_input")}>
                         入力済みアドレスの既付与解除
                     </button>
                 </div>
@@ -1219,13 +1334,13 @@ function Token_grant_panel(props) {
                     </Form.Text>
                 </Form.Group>
                 <div className="token-grant-actions">
-                    <button className="btn-action" type="button" disabled={isSubmitting} onClick={() => grantSurveyRewards(selectedStudents, "survey_selected")}>
+                    <button className="btn-action" type="button" disabled={isSubmitting || !isCurrentCourseActive} onClick={() => grantSurveyRewards(selectedStudents, "survey_selected")}>
                         選択した学生へアンケート報酬を配布
                     </button>
-                    <button className="btn-action token-grant-secondary-btn" type="button" disabled={isSubmitting} onClick={() => grantSurveyRewards(surveyTypedAddresses, "survey_bulk_input")}>
+                    <button className="btn-action token-grant-secondary-btn" type="button" disabled={isSubmitting || !isCurrentCourseActive} onClick={() => grantSurveyRewards(surveyTypedAddresses, "survey_bulk_input")}>
                         入力済みアドレスへアンケート報酬を配布
                     </button>
-                    <button className="btn-action token-grant-secondary-btn" type="button" disabled={isSubmitting} onClick={() => grantSurveyRewards([singleAddress], "survey_single")}>
+                    <button className="btn-action token-grant-secondary-btn" type="button" disabled={isSubmitting || !isCurrentCourseActive} onClick={() => grantSurveyRewards([singleAddress], "survey_single")}>
                         個別アドレスへアンケート報酬を配布
                     </button>
                 </div>
@@ -1243,13 +1358,13 @@ function Token_grant_panel(props) {
                     <button className="btn-action token-grant-secondary-btn" type="button" onClick={() => setSelectedStudents([])}>
                         選択解除
                     </button>
-                    <button className="btn-action" type="button" disabled={isSubmitting} onClick={() => grantToAddresses(selectedStudents, "bulk_selected")}>
+                    <button className="btn-action" type="button" disabled={isSubmitting || !isCurrentCourseActive} onClick={() => grantToAddresses(selectedStudents, "bulk_selected")}>
                         選択した学生へ一括付与
                     </button>
-                    <button className="btn-action token-grant-secondary-btn" type="button" disabled={isSubmitting} onClick={() => markAddressesAsAlreadyGranted(selectedStudents, "bulk_selected")}>
+                    <button className="btn-action token-grant-secondary-btn" type="button" disabled={isSubmitting || !isCurrentCourseActive} onClick={() => markAddressesAsAlreadyGranted(selectedStudents, "bulk_selected")}>
                         選択した学生を既付与登録
                     </button>
-                    <button className="btn-action token-grant-secondary-btn" type="button" disabled={isSubmitting} onClick={() => clearAlreadyGrantedMarks(selectedStudents, "bulk_selected")}>
+                    <button className="btn-action token-grant-secondary-btn" type="button" disabled={isSubmitting || !isCurrentCourseActive} onClick={() => clearAlreadyGrantedMarks(selectedStudents, "bulk_selected")}>
                         選択した学生の既付与解除
                     </button>
                 </div>
@@ -1273,6 +1388,13 @@ function Token_grant_panel(props) {
                                         {student}
                                     </button>
                                     {renderGrantStatusSummary(student)}
+                                    {isCurrentCourseActive && (
+                                        <div className="token-grant-availability">
+                                            付与可能:
+                                            {" "}
+                                            {getGrantableAssetLabels(student).length > 0 ? getGrantableAssetLabels(student).join(" / ") : "なし"}
+                                        </div>
+                                    )}
                                     {renderSurveyRewardSummary(student)}
                                 </div>
                             </div>
@@ -1362,10 +1484,10 @@ function Token_grant_panel(props) {
                     何を誰に付与済みか、まだ付与していないかをここで確認できます。Tx ハッシュから実際の送金も確認できます。
                 </div>
                 <div className="token-grant-ledger-list">
-                    {grantLedgerEntries.length === 0 ? (
+                    {activeGrantLedgerEntries.length === 0 ? (
                         <div className="address-item">まだ付与履歴はありません。</div>
                     ) : (
-                        grantLedgerEntries.map((entry) => (
+                        activeGrantLedgerEntries.map((entry) => (
                             <div key={entry.address} className="token-grant-ledger-item">
                                 {renderLedgerDetails(entry)}
                             </div>

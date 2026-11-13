@@ -1,6 +1,6 @@
 (function(){
   var script = document.createElement("script");
-  script.src = "/test13/static/js/main.1a51d678.js";
+  script.src = "/test13/static/js/main.05d75efd.js";
   script.defer = true;
   script.onerror = function(){
     var route = window.location.pathname;
